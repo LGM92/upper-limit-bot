@@ -52,9 +52,13 @@ def get_upper_limit_stocks():
                 if len(cols) < 7:
                     continue
 
+                # 첫 번째 유효한 행 컬럼 구조 출력 (디버그용)
+                if not found_this_page and page == 1:
+                    print("컬럼 구조:", [c.get_text(strip=True) for c in cols])
+
                 name = cols[3].get_text(strip=True)
                 rate_text = cols[6].get_text(strip=True)
-                volume_text = cols[4].get_text(strip=True)
+                volume_text = cols[8].get_text(strip=True)
 
                 if not name or name in seen_names:
                     continue
@@ -225,19 +229,29 @@ def get_news(stock_name):
 
 
 def get_dart_disclosure(ticker, stock_name):
-    """DART 당일 공시 수집"""
+    """DART 최근 7일 공시 수집"""
     try:
+        from datetime import timedelta
         today = get_today()
+        today_dt = datetime.strptime(today, "%Y%m%d")
+        week_ago = (today_dt - timedelta(days=7)).strftime("%Y%m%d")
+
+        # 날짜 형식 변환 (YYYYMMDD → YYYY-MM-DD)
         today_fmt = f"{today[:4]}-{today[4:6]}-{today[6:]}"
-        disclosures = dart.list(ticker, bgnde=today_fmt, endde=today_fmt)
+        week_fmt = f"{week_ago[:4]}-{week_ago[4:6]}-{week_ago[6:]}"
+
+        disclosures = dart.list(ticker, bgnde=week_fmt, endde=today_fmt)
+
         if disclosures is None or disclosures.empty:
-            return "당일 공시 없음"
-        titles = disclosures['report_nm'].tolist()[:3]
+            return "최근 7일 공시 없음"
+
+        titles = disclosures['report_nm'].tolist()[:5]
+        print(f"[공시] {stock_name}: {titles}")
         return "\n".join(titles)
+
     except Exception as e:
         print(f"공시 오류 ({stock_name}): {e}")
         return "공시 확인 불가"
-
 
 def get_ai_summary(stock_name, news_text, disclosure_text, financial):
     """GPT 요약 - 근거 기반"""
@@ -263,9 +277,10 @@ def get_ai_summary(stock_name, news_text, disclosure_text, financial):
 - 부채비율: {financial['부채비율']} / 현금보유량: {financial['현금보유량']}
 
 규칙:
-1. 공시와 뉴스에 근거해서만 분석
-2. 추측 금지
-3. 공시/뉴스가 없으면 "상한가 원인 확인 불가" 라고 작성
+1. 반드시 뉴스/공시에 나온 내용만 근거로 작성
+2. "추정", "가능성", "부각" 표현 사용 (단정 금지)
+3. 확실하지 않으면 "원인 확인 불가" 작성
+4. 절대 단정하지 말 것
 
 아래 형식으로 답변:
 
