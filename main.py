@@ -3,6 +3,7 @@ import time
 from datetime import datetime
 import pandas as pd
 import OpenDartReader
+import feedparser
 from openai import OpenAI
 import requests
 from bs4 import BeautifulSoup
@@ -33,7 +34,7 @@ def get_upper_limit_stocks():
 
     try:
         results = []
-        seen_names = set()  # 중복 방지
+        seen_names = set()
         headers = {"User-Agent": "Mozilla/5.0"}
 
         for page in range(1, 20):
@@ -88,7 +89,6 @@ def get_upper_limit_stocks():
                 })
                 found_this_page = True
 
-            # 새로운 종목이 없으면 마지막 페이지
             if not found_this_page:
                 break
 
@@ -102,8 +102,9 @@ def get_upper_limit_stocks():
         print(f"상한가 수집 오류: {e}")
         return pd.DataFrame()
 
+
 def get_financial_data(ticker, stock_name):
-    """재무 데이터 수집 (DART)"""
+    """재무 데이터 수집 (네이버 + DART)"""
     result = {
         '시가총액': '-', 'PER': '-', '매출성장률': '-',
         '영업이익률': '-', '영업이익성장률': '-',
@@ -111,42 +112,40 @@ def get_financial_data(ticker, stock_name):
     }
 
     try:
-        # 네이버 금융에서 시가총액, PER 가져오기
+        # 네이버 금융에서 시가총액, PER
         url = f"https://finance.naver.com/item/main.naver?code={ticker}"
         headers = {"User-Agent": "Mozilla/5.0"}
         res = requests.get(url, headers=headers, timeout=5)
         soup = BeautifulSoup(res.text, 'html.parser')
 
-        # 시가총액
         cap_tag = soup.select_one('em#_market_sum')
         if cap_tag:
             result['시가총액'] = cap_tag.get_text(strip=True) + '억원'
 
-        # PER
         per_tag = soup.select_one('em#_per')
         if per_tag:
             per_text = per_tag.get_text(strip=True)
             if per_text and per_text != 'N/A':
                 result['PER'] = per_text
 
+        print(f"[NAVER] {stock_name} 시총: {result['시가총액']} PER: {result['PER']}")
         time.sleep(0.5)
+
     except Exception as e:
         print(f"시가총액/PER 오류 ({stock_name}): {e}")
 
     try:
-        # DART 재무데이터 - load_fs → fs 로 수정
+        # DART 재무데이터 - 종목코드로 조회
         current_year = str(datetime.now().year - 1)
         prev_year = str(datetime.now().year - 2)
 
-        # 연결재무제표 우선, 없으면 별도재무제표
-        fs_current = dart.finstate(stock_name, current_year, fs_div='CFS')
-        if fs_current is None or fs_current.empty:
-            fs_current = dart.finstate(stock_name, current_year, fs_div='OFS')
+        fs_current = dart.finstate(ticker, current_year)
+        print(f"[DART] {stock_name} {current_year}년 재무제표:")
+        if fs_current is not None and not fs_current.empty:
+            print(fs_current[['account_nm', 'thstrm_amount']].head(10))
         time.sleep(0.5)
 
-        fs_prev = dart.finstate(stock_name, prev_year, fs_div='CFS')
-        if fs_prev is None or fs_prev.empty:
-            fs_prev = dart.finstate(stock_name, prev_year, fs_div='OFS')
+        fs_prev = dart.finstate(ticker, prev_year)
 
         def get_account(fs, label):
             try:
@@ -202,40 +201,82 @@ def get_financial_data(ticker, stock_name):
 
     return result
 
+
 def get_news(stock_name):
-    """네이버 뉴스 수집"""
+    """구글 뉴스 RSS로 수집"""
     try:
-        url = f"https://search.naver.com/search.naver?where=news&query={stock_name}+주가+상한가"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        titles = soup.select('.news_tit')[:3]
-        news_list = [t.get_text() for t in titles]
-        return ' / '.join(news_list) if news_list else "관련 뉴스 없음"
-    except:
-        return "뉴스 수집 실패"
-    print(name, news)
+        query = f'"{stock_name}" 주가'.replace(" ", "+")
+        url = (
+            f"https://news.google.com/rss/search?"
+            f"q={query}"
+            f"&hl=ko&gl=KR&ceid=KR:ko"
+        )
+        feed = feedparser.parse(url)
+        news_list = [entry.title for entry in feed.entries[:5]]
+
+        if not news_list:
+            return "뉴스 없음"
+
+        return "\n".join(news_list)
+
+    except Exception as e:
+        print(f"뉴스 오류: {e}")
+        return "뉴스 없음"
 
 
-def get_ai_summary(stock_name, news_text, financial):
-    """GPT 요약"""
+def get_dart_disclosure(ticker, stock_name):
+    """DART 당일 공시 수집"""
+    try:
+        today = get_today()
+        today_fmt = f"{today[:4]}-{today[4:6]}-{today[6:]}"
+        disclosures = dart.list(ticker, bgnde=today_fmt, endde=today_fmt)
+        if disclosures is None or disclosures.empty:
+            return "당일 공시 없음"
+        titles = disclosures['report_nm'].tolist()[:3]
+        return "\n".join(titles)
+    except Exception as e:
+        print(f"공시 오류 ({stock_name}): {e}")
+        return "공시 확인 불가"
+
+
+def get_ai_summary(stock_name, news_text, disclosure_text, financial):
+    """GPT 요약 - 근거 기반"""
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            max_tokens=200,
+            max_tokens=300,
             messages=[{
                 "role": "user",
                 "content": f"""
 종목명: {stock_name}
-관련 뉴스: {news_text}
-재무지표:
+
+[당일 공시]
+{disclosure_text}
+
+[관련 뉴스]
+{news_text}
+
+[재무지표]
 - 시가총액: {financial['시가총액']}
 - PER: {financial['PER']} / PEG: {financial['PEG']} / ROE: {financial['ROE']}
 - 매출성장률: {financial['매출성장률']} / 영업이익률: {financial['영업이익률']} / 영업이익성장률: {financial['영업이익성장률']}
 - 부채비율: {financial['부채비율']} / 현금보유량: {financial['현금보유량']}
 
-1) 상한가 이유 1줄 요약
-2) 재무 상태 1줄 평가
+규칙:
+1. 공시와 뉴스에 근거해서만 분석
+2. 추측 금지
+3. 공시/뉴스가 없으면 "상한가 원인 확인 불가" 라고 작성
+
+아래 형식으로 답변:
+
+[상한가 원인]
+...
+
+[원인 분류]
+AI / 반도체 / 바이오 / 정책수혜 / 실적개선 / M&A / 수급 / 기타 중 하나
+
+[재무 평가]
+...
 """
             }]
         )
@@ -256,8 +297,8 @@ def send_telegram(message):
 
 
 def main():
-    date_str = get_today()
-    today_display = f"{date_str[:4]}년 {date_str[4:6]}월 {date_str[6:]}일"
+    today = get_today()
+    today_display = f"{today[:4]}년 {today[4:6]}월 {today[6:]}일"
 
     upper_df = get_upper_limit_stocks()
 
@@ -274,19 +315,25 @@ def main():
         rate = row.get('FLUC_RT', 0)
         volume = row.get('ACC_TRDVOL', 0)
 
-        print(f"{name} 처리 중...")
+        print(f"\n{name} 처리 중...")
+
         financial = get_financial_data(ticker, name)
         time.sleep(1)
+
         news = get_news(name)
-        print(f"[DEBUG] {name}")
-        print(f"[NEWS] {news}")
-        
+        print(f"\n===== {name} 뉴스 =====")
+        print(news)
+        print("=====================\n")
         time.sleep(1)
-        
-        summary = get_ai_summary(name, news, financial)
+
+        disclosure = get_dart_disclosure(ticker, name)
+        print(f"[공시] {name}: {disclosure}")
+        time.sleep(1)
+
+        summary = get_ai_summary(name, news, disclosure, financial)
 
         msg += f"*{name}* (+{rate:.1f}%)\n"
-        msg += f"거래량: {volume}주\n"
+        msg += f"거래량: {int(volume):,}주\n"
         msg += f"시가총액: {financial['시가총액']} | PER: {financial['PER']} | PEG: {financial['PEG']}\n"
         msg += f"ROE: {financial['ROE']} | 부채비율: {financial['부채비율']} | 현금: {financial['현금보유량']}\n"
         msg += f"매출성장률: {financial['매출성장률']} | 영업이익률: {financial['영업이익률']} | 영업이익성장률: {financial['영업이익성장률']}\n"
