@@ -1,0 +1,37 @@
+name: 상한가 분석 봇
+
+on:
+  schedule:
+    # 매일 오후 4시 실행 (KST 16:00 = UTC 07:00)
+    - cron: '0 7 * * 1-5'  # 월~금만 실행
+  workflow_dispatch:  # 수동 실행 버튼도 활성화
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v3
+
+      - name: Python 설정
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: |
+          pip install pykrx
+          pip install openai
+          pip install requests
+          pip install beautifulsoup4
+          pip install pandas
+          pip install opendartreader
+
+      - name: 봇 실행
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: python main.py
