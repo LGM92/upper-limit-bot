@@ -29,64 +29,67 @@ def get_today():
 def get_upper_limit_stocks():
     """네이버 금융에서 상한가 종목 수집"""
     today = get_today()
-    today_display = f"{today[:4]}.{today[4:6]}.{today[6:]}"
     print(f"[{today}] 상한가 종목 수집 시작...")
 
     try:
         results = []
+        seen_names = set()  # 중복 방지
         headers = {"User-Agent": "Mozilla/5.0"}
 
-        for page in range(1, 10):  # 최대 9페이지
+        for page in range(1, 20):
             url = f"https://finance.naver.com/sise/sise_upper.naver?page={page}"
             res = requests.get(url, headers=headers, timeout=10)
-            
-            print("status:", res.status_code)
-            print("html length:", len(res.text))
-            print("first 500 chars:")
-            print(res.text[:500])
-            
             soup = BeautifulSoup(res.text, 'html.parser')
 
-            print("table count:", len(soup.find_all("table")))
-
-            for i, table in enumerate(soup.find_all("table")[:10]):
-                print(f"table {i}:")
-                print(str(table)[:300])
-            
             rows = soup.select('table.type_5 tr')
-            for row in rows[:3]:
-                cols = row.select("td")
-                if len(cols) > 0:
-                    print([c.get_text(strip=True) for c in cols])
-            print("rows:", len(rows))
             if not rows:
                 break
 
-            found = False
+            found_this_page = False
             for row in rows:
-                cols = row.select('td')
-                if len(cols) < 10:
+                cols = row.select("td")
+                if len(cols) < 7:
                     continue
 
-                name = cols[1].get_text(strip=True)
-                rate = cols[2].get_text(strip=True)
-                volume = cols[9].get_text(strip=True)
-                ticker_tag = cols[1].select_one('a')
+                name = cols[3].get_text(strip=True)
+                rate_text = cols[6].get_text(strip=True)
+                volume_text = cols[4].get_text(strip=True)
+
+                if not name or name in seen_names:
+                    continue
+
+                # 종목코드 추출
                 ticker = ''
-                if ticker_tag and 'href' in ticker_tag.attrs:
-                    href = ticker_tag['href']
+                link = cols[3].select_one('a')
+                if link and 'href' in link.attrs:
+                    href = link['href']
                     ticker = href.split('code=')[-1] if 'code=' in href else ''
 
-                if name:
-                    results.append({
-                        'Code': ticker,
-                        'Name': name,
-                        'FLUC_RT': rate.replace('%', '').replace('+', ''),
-                        'ACC_TRDVOL': volume.replace(',', '')
-                    })
-                    found = True
+                # 등락률 파싱
+                rate_clean = rate_text.replace('%', '').replace('+', '').strip()
+                try:
+                    rate = float(rate_clean)
+                except:
+                    continue
 
-            if not found:
+                # 거래량 파싱
+                volume_clean = volume_text.replace(',', '').strip()
+                try:
+                    volume = int(volume_clean)
+                except:
+                    volume = 0
+
+                seen_names.add(name)
+                results.append({
+                    'Code': ticker,
+                    'Name': name,
+                    'FLUC_RT': rate,
+                    'ACC_TRDVOL': volume
+                })
+                found_this_page = True
+
+            # 새로운 종목이 없으면 마지막 페이지
+            if not found_this_page:
                 break
 
             time.sleep(0.3)
@@ -98,7 +101,6 @@ def get_upper_limit_stocks():
     except Exception as e:
         print(f"상한가 수집 오류: {e}")
         return pd.DataFrame()
-
 
 def get_financial_data(ticker, stock_name):
     """재무 데이터 수집 (DART)"""
@@ -272,10 +274,10 @@ def main():
     msg = f"📈 *{today_display} 상한가 종목*\n총 {len(upper_df)}개\n━━━━━━━━━━━━━━\n\n"
 
     for _, row in upper_df.iterrows():
-        ticker = row.get('ISU_SRT_CD', row.get('Code', ''))
-        name = row.get('ISU_ABBRV', row.get('Name', ticker))
-        rate = float(str(row.get('FLUC_RT', 0)).replace(',', ''))
-        volume = row.get('ACC_TRDVOL', row.get('Volume', 0))
+        ticker = row.get('Code', '')
+        name = row.get('Name', ticker)
+        rate = row.get('FLUC_RT', 0)
+        volume = row.get('ACC_TRDVOL', 0)
 
         print(f"{name} 처리 중...")
         financial = get_financial_data(ticker, name)
