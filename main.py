@@ -54,6 +54,10 @@ def get_upper_limit_stocks():
                 print(str(table)[:300])
             
             rows = soup.select('table.type_5 tr')
+            for row in rows[:3]:
+                cols = row.select("td")
+                if len(cols) > 0:
+                    print([c.get_text(strip=True) for c in cols])
             print("rows:", len(rows))
             if not rows:
                 break
