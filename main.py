@@ -53,7 +53,7 @@ def get_upper_limit_stocks():
                 print(f"table {i}:")
                 print(str(table)[:300])
             
-            rows = soup.select('table.type_2 tr')
+            rows = soup.select('table.type_5 tr')
             print("rows:", len(rows))
             if not rows:
                 break
