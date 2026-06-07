@@ -20,7 +20,7 @@ dart_lib.set_api_key(DART_API_KEY)
 
 def get_upper_limit_stocks():
     """상한가 종목 수집 - 전체 시세 한번에 가져오기"""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = "2026-06-05"
     print(f"[{today}] 상한가 종목 수집 시작...")
 
     try:
