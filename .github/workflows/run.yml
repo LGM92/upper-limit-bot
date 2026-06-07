@@ -21,13 +21,12 @@ jobs:
 
       - name: 패키지 설치
         run: |
-          pip install pykrx
           pip install openai
           pip install requests
           pip install beautifulsoup4
           pip install pandas
-          pip install opendartreader
           pip install finance-datareader
+          pip install dart-fss
 
       - name: 봇 실행
         env:
