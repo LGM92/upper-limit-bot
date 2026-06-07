@@ -19,45 +19,34 @@ dart_lib.set_api_key(DART_API_KEY)
 
 
 def get_upper_limit_stocks():
-    """상한가 종목 수집"""
+    """상한가 종목 수집 - 전체 시세 한번에 가져오기"""
     today = datetime.now().strftime("%Y-%m-%d")
     print(f"[{today}] 상한가 종목 수집 시작...")
 
     try:
-        kospi = fdr.StockListing('KOSPI')
+        # 한 번의 요청으로 전체 시세 가져오기
+        kospi = fdr.DataReader('KRX/KOSPI', today, today)
+        print(f"KOSPI 수집 완료: {len(kospi)}개")
         time.sleep(1)
-        kosdaq = fdr.StockListing('KOSDAQ')
-        all_stocks = pd.concat([kospi, kosdaq])
+        kosdaq = fdr.DataReader('KRX/KOSDAQ', today, today)
+        print(f"KOSDAQ 수집 완료: {len(kosdaq)}개")
 
-        # 오늘 시세 가져오기
-        results = []
-        for _, row in all_stocks.iterrows():
-            code = row.get('Code', '')
-            name = row.get('Name', '')
-            if not code:
-                continue
-            try:
-                df = fdr.DataReader(code, today, today)
-                if df.empty:
-                    continue
-                change = df.iloc[-1].get('Change', 0)
-                volume = df.iloc[-1].get('Volume', 0)
-                close = df.iloc[-1].get('Close', 0)
-                if change >= 0.295:
-                    results.append({
-                        'Code': code,
-                        'Name': name,
-                        'Change': change * 100,
-                        'Volume': volume,
-                        'Close': close
-                    })
-                time.sleep(0.1)
-            except:
-                continue
+        df = pd.concat([kospi, kosdaq])
+        print("컬럼 목록:", df.columns.tolist())  # 디버깅용
 
-        upper_df = pd.DataFrame(results)
-        print(f"상한가 종목 {len(upper_df)}개 발견")
-        return upper_df
+        # 등락률 컬럼 찾기
+        if 'Change' in df.columns:
+            upper = df[df['Change'] >= 0.295].copy()
+            upper['등락률'] = upper['Change'] * 100
+        elif '등락률' in df.columns:
+            upper = df[df['등락률'] >= 29.5].copy()
+        else:
+            print("등락률 컬럼을 찾을 수 없습니다.")
+            return pd.DataFrame()
+
+        upper = upper.reset_index()
+        print(f"상한가 종목 {len(upper)}개 발견")
+        return upper
 
     except Exception as e:
         print(f"상한가 수집 오류: {e}")
@@ -73,7 +62,7 @@ def get_financial_data(ticker, stock_name):
     }
 
     try:
-        # 시가총액, PER - KRX 전체 종목 리스트에서
+        # 시가총액, PER
         krx = fdr.StockListing('KRX')
         row = krx[krx['Code'] == ticker]
         if not row.empty:
@@ -209,15 +198,16 @@ def main():
 
     if upper_df.empty:
         send_telegram(f"📊 {today}\n오늘 상한가 종목이 없습니다.")
+        print("상한가 종목 없음. 종료.")
         return
 
     msg = f"📈 *{today} 상한가 종목*\n총 {len(upper_df)}개\n━━━━━━━━━━━━━━\n\n"
 
     for _, row in upper_df.iterrows():
-        ticker = row['Code']
-        name = row['Name']
-        rate = row['Change']
-        volume = row['Volume']
+        ticker = row.get('Code', row.get('티커', ''))
+        name = row.get('Name', row.get('종목명', ticker))
+        rate = row.get('등락률', 0)
+        volume = row.get('Volume', row.get('거래량', 0))
 
         print(f"{name} 처리 중...")
         financial = get_financial_data(ticker, name)
