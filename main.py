@@ -214,6 +214,7 @@ def get_news(stock_name):
         return ' / '.join(news_list) if news_list else "관련 뉴스 없음"
     except:
         return "뉴스 수집 실패"
+    print(name, news)
 
 
 def get_ai_summary(stock_name, news_text, financial):
@@ -277,7 +278,11 @@ def main():
         financial = get_financial_data(ticker, name)
         time.sleep(1)
         news = get_news(name)
+        print(f"[DEBUG] {name}")
+        print(f"[NEWS] {news}")
+        
         time.sleep(1)
+        
         summary = get_ai_summary(name, news, financial)
 
         msg += f"*{name}* (+{rate:.1f}%)\n"
