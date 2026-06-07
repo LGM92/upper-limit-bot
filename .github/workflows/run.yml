@@ -27,6 +27,7 @@ jobs:
           pip install pandas
           pip install finance-datareader
           pip install opendartreader
+          pip install feedparser
 
       - name: 봇 실행
         env:
