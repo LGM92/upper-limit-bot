@@ -39,9 +39,16 @@ def get_upper_limit_stocks():
         for page in range(1, 10):  # 최대 9페이지
             url = f"https://finance.naver.com/sise/sise_upper.naver?page={page}"
             res = requests.get(url, headers=headers, timeout=10)
+            
+            print("status:", res.status_code)
+            print("html length:", len(res.text))
+            print("first 500 chars:")
+            print(res.text[:500])
+            
             soup = BeautifulSoup(res.text, 'html.parser')
-
+            
             rows = soup.select('table.type_2 tr')
+            print("rows:", len(rows))
             if not rows:
                 break
 
