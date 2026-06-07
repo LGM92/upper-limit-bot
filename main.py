@@ -111,43 +111,30 @@ def get_financial_data(ticker, stock_name):
     }
 
     try:
-        # KRX에서 시가총액, PER 가져오기
-        today = get_today()
-        url = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "http://data.krx.co.kr"
-        }
-        payload = {
-            "bld": "dbms/MDC/STAT/standard/MDCSTAT03501",
-            "locale": "ko_KR",
-            "trdDd": today,
-            "strtCd": ticker,
-            "endCd": ticker,
-            "csvxls_isNo": "false"
-        }
-        res = requests.post(url, data=payload, headers=headers, timeout=10)
-        data = res.json()
+        # 네이버 금융에서 시가총액, PER 가져오기
+        url = f"https://finance.naver.com/item/main.naver?code={ticker}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(res.text, 'html.parser')
 
-        if 'OutBlock_1' in data and data['OutBlock_1']:
-            row = data['OutBlock_1'][0]
-            # 시가총액
-            if 'MKTCAP' in row:
-                cap = float(str(row['MKTCAP']).replace(',', ''))
-                result['시가총액'] = f"{cap / 1e8:.0f}억원"
-            # PER
-            if 'PER' in row:
-                per = row['PER']
-                if per and per != '-':
-                    result['PER'] = f"{float(per):.1f}"
+        # 시가총액
+        cap_tag = soup.select_one('em#_market_sum')
+        if cap_tag:
+            result['시가총액'] = cap_tag.get_text(strip=True) + '억원'
+
+        # PER
+        per_tag = soup.select_one('em#_per')
+        if per_tag:
+            per_text = per_tag.get_text(strip=True)
+            if per_text and per_text != 'N/A':
+                result['PER'] = per_text
 
         time.sleep(0.5)
-
     except Exception as e:
         print(f"시가총액/PER 오류 ({stock_name}): {e}")
 
     try:
-        # DART 재무데이터
+        # DART 재무데이터 - load_fs → fs 로 수정
         corp_list = dart_lib.get_corp_list()
         corp = corp_list.find_by_stock_code(ticker)
         if not corp:
@@ -157,9 +144,10 @@ def get_financial_data(ticker, stock_name):
         current_year = datetime.now().year - 1
         prev_year = datetime.now().year - 2
 
-        fs_current = corp.load_fs(bgn_de=f'{current_year}0101')
+        # load_fs 대신 fs 사용
+        fs_current = corp.fs(bgn_de=f'{current_year}0101')
         time.sleep(0.5)
-        fs_prev = corp.load_fs(bgn_de=f'{prev_year}0101')
+        fs_prev = corp.fs(bgn_de=f'{prev_year}0101')
 
         def get_account(fs, label):
             try:
@@ -197,16 +185,18 @@ def get_financial_data(ticker, stock_name):
             result['ROE'] = f"{(net_income / total_equity * 100):.1f}%"
 
         if result['PER'] != '-' and result['영업이익성장률'] != '-':
-            per_val = float(result['PER'])
-            op_growth_val = float(result['영업이익성장률'].replace('%', ''))
-            if op_growth_val > 0:
-                result['PEG'] = f"{per_val / op_growth_val:.2f}"
+            try:
+                per_val = float(result['PER'].replace(',', ''))
+                op_growth_val = float(result['영업이익성장률'].replace('%', ''))
+                if op_growth_val > 0:
+                    result['PEG'] = f"{per_val / op_growth_val:.2f}"
+            except:
+                pass
 
     except Exception as e:
         print(f"DART 오류 ({stock_name}): {e}")
 
     return result
-
 
 def get_news(stock_name):
     """네이버 뉴스 수집"""
