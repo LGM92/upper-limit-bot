@@ -61,7 +61,7 @@ def get_upper_limit_stocks():
 
                 name = cols[3].get_text(strip=True)
                 rate_text = cols[6].get_text(strip=True)
-                volume_text = cols[8].get_text(strip=True)
+                volume_text = cols[7].get_text(strip=True)
 
                 if not name or name in seen_names:
                     continue
@@ -163,11 +163,11 @@ def get_financial_data(ticker, stock_name):
         time.sleep(0.5)
         fs_prev = dart.finstate(ticker, prev_year)
 
-        # DART가 오류 딕셔너리를 반환하는 경우 처리
-        if isinstance(fs_current, dict):
+        # DART 오류 딕셔너리 또는 비정상 응답 처리
+        if not isinstance(fs_current, pd.DataFrame):
             print(f"DART 오류응답 ({stock_name}) {current_year}: {fs_current}")
             fs_current = None
-        if isinstance(fs_prev, dict):
+        if not isinstance(fs_prev, pd.DataFrame):
             print(f"DART 오류응답 ({stock_name}) {prev_year}: {fs_prev}")
             fs_prev = None
 
@@ -180,9 +180,10 @@ def get_financial_data(ticker, stock_name):
         cash = (
             get_account(fs_current, '현금및현금성자산')
             or get_account(fs_current, '현금성자산')
+            or get_account(fs_current, '현금및예금')
             or get_account(fs_current, '현금')
         )
-
+        print(f"  현금 검색결과: {cash}")
         # 전년도 수치
         revenue_prev   = get_account(fs_prev, '매출액')
         op_income_prev = get_account(fs_prev, '영업이익')
@@ -369,11 +370,13 @@ def main():
 
         summary = get_ai_summary(name, news, disclosure, financial)
 
+        ref_year = str(datetime.now().year - 1)
         msg += f"*{name}* (+{rate:.1f}%)\n"
         msg += f"거래량: {int(volume):,}주\n"
         msg += f"시가총액: {financial['시가총액']} | PER: {financial['PER']} | PEG: {financial['PEG']}\n"
         msg += f"ROE: {financial['ROE']} | 부채비율: {financial['부채비율']} | 현금: {financial['현금보유량']}\n"
         msg += f"매출성장률: {financial['매출성장률']} | 영업이익률: {financial['영업이익률']} | 영업이익성장률: {financial['영업이익성장률']}\n"
+        msg += f"_(재무 기준: {ref_year}년 사업보고서)_\n"
         msg += f"💬 {summary}\n\n"
 
     for i in range(0, len(msg), 4000):
