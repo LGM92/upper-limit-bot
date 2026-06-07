@@ -46,6 +46,12 @@ def get_upper_limit_stocks():
             print(res.text[:500])
             
             soup = BeautifulSoup(res.text, 'html.parser')
+
+            print("table count:", len(soup.find_all("table")))
+
+            for i, table in enumerate(soup.find_all("table")[:10]):
+                print(f"table {i}:")
+                print(str(table)[:300])
             
             rows = soup.select('table.type_2 tr')
             print("rows:", len(rows))
