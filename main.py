@@ -27,61 +27,56 @@ def get_today():
 
 
 def get_upper_limit_stocks():
-    """KRX 공식 데이터로 상한가 종목 수집"""
+    """네이버 금융에서 상한가 종목 수집"""
     today = get_today()
+    today_display = f"{today[:4]}.{today[4:6]}.{today[6:]}"
     print(f"[{today}] 상한가 종목 수집 시작...")
 
     try:
-        # KRX 공식 API - KOSPI
-        url = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
-
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "http://data.krx.co.kr"
-        }
-
         results = []
+        headers = {"User-Agent": "Mozilla/5.0"}
 
-        for market_id, market_name in [("STK", "KOSPI"), ("KSQ", "KOSDAQ")]:
-            payload = {
-                "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
-                "locale": "ko_KR",
-                "mktId": market_id,
-                "trdDd": today,
-                "share": "1",
-                "money": "1",
-                "csvxls_isNo": "false"
-            }
+        for page in range(1, 10):  # 최대 9페이지
+            url = f"https://finance.naver.com/sise/sise_upper.naver?page={page}"
+            res = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(res.text, 'html.parser')
 
-            res = requests.post(url, data=payload, headers=headers, timeout=10)
-            data = res.json()
+            rows = soup.select('table.type_2 tr')
+            if not rows:
+                break
 
-            if 'OutBlock_1' not in data:
-                print(f"{market_name} 데이터 없음")
-                continue
+            found = False
+            for row in rows:
+                cols = row.select('td')
+                if len(cols) < 10:
+                    continue
 
-            df = pd.DataFrame(data['OutBlock_1'])
-            print(f"{market_name} 수집 완료: {len(df)}개")
+                name = cols[1].get_text(strip=True)
+                rate = cols[2].get_text(strip=True)
+                volume = cols[9].get_text(strip=True)
+                ticker_tag = cols[1].select_one('a')
+                ticker = ''
+                if ticker_tag and 'href' in ticker_tag.attrs:
+                    href = ticker_tag['href']
+                    ticker = href.split('code=')[-1] if 'code=' in href else ''
 
-            # 등락률 컬럼 확인 및 상한가 필터
-            # KRX 컬럼명: FLUC_RT (등락률)
-            if 'FLUC_RT' in df.columns:
-                df['FLUC_RT'] = pd.to_numeric(df['FLUC_RT'], errors='coerce')
-                upper = df[df['FLUC_RT'] >= 29.5].copy()
-                upper['market'] = market_name
-                results.append(upper)
-                print(f"{market_name} 상한가: {len(upper)}개")
-            else:
-                print(f"컬럼 목록: {df.columns.tolist()}")
+                if name:
+                    results.append({
+                        'Code': ticker,
+                        'Name': name,
+                        'FLUC_RT': rate.replace('%', '').replace('+', ''),
+                        'ACC_TRDVOL': volume.replace(',', '')
+                    })
+                    found = True
 
-            time.sleep(0.5)
+            if not found:
+                break
 
-        if not results:
-            return pd.DataFrame()
+            time.sleep(0.3)
 
-        final_df = pd.concat(results, ignore_index=True)
-        print(f"전체 상한가 종목: {len(final_df)}개")
-        return final_df
+        df = pd.DataFrame(results)
+        print(f"상한가 종목 {len(df)}개 발견")
+        return df
 
     except Exception as e:
         print(f"상한가 수집 오류: {e}")
