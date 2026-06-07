@@ -193,7 +193,7 @@ def send_telegram(message):
 
 
 def main():
-    today = datetime.now().strftime("%Y년 %m월 %d일")
+    today = "2026년 06월 05일"
     upper_df = get_upper_limit_stocks()
 
     if upper_df.empty:
