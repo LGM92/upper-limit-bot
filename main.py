@@ -14,7 +14,7 @@ OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
 DART_API_KEY = os.environ['DART_API_KEY']
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-dart = OpenDartReader.OpenDartReader(DART_API_KEY)
+dart = OpenDartReader(DART_API_KEY)
 
 # 테스트용 날짜 고정 (실제 운영시 None으로 변경)
 TEST_DATE = "20260605"  # None 으로 바꾸면 오늘 날짜 자동 적용
