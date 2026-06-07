@@ -2,7 +2,6 @@ import os
 import time
 from datetime import datetime
 import pandas as pd
-import FinanceDataReader as fdr
 import dart_fss as dart_lib
 from openai import OpenAI
 import requests
@@ -17,36 +16,72 @@ DART_API_KEY = os.environ['DART_API_KEY']
 client = OpenAI(api_key=OPENAI_API_KEY)
 dart_lib.set_api_key(DART_API_KEY)
 
+# 테스트용 날짜 고정 (실제 운영시 None으로 변경)
+TEST_DATE = "20260605"  # None 으로 바꾸면 오늘 날짜 자동 적용
+
+
+def get_today():
+    if TEST_DATE:
+        return TEST_DATE
+    return datetime.now().strftime("%Y%m%d")
+
 
 def get_upper_limit_stocks():
-    """상한가 종목 수집 - 전체 시세 한번에 가져오기"""
-    today = "2026-06-05"
+    """KRX 공식 데이터로 상한가 종목 수집"""
+    today = get_today()
     print(f"[{today}] 상한가 종목 수집 시작...")
 
     try:
-        # 한 번의 요청으로 전체 시세 가져오기
-        kospi = fdr.DataReader('KRX/KOSPI', today, today)
-        print(f"KOSPI 수집 완료: {len(kospi)}개")
-        time.sleep(1)
-        kosdaq = fdr.DataReader('KRX/KOSDAQ', today, today)
-        print(f"KOSDAQ 수집 완료: {len(kosdaq)}개")
+        # KRX 공식 API - KOSPI
+        url = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
 
-        df = pd.concat([kospi, kosdaq])
-        print("컬럼 목록:", df.columns.tolist())  # 디버깅용
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "http://data.krx.co.kr"
+        }
 
-        # 등락률 컬럼 찾기
-        if 'Change' in df.columns:
-            upper = df[df['Change'] >= 0.295].copy()
-            upper['등락률'] = upper['Change'] * 100
-        elif '등락률' in df.columns:
-            upper = df[df['등락률'] >= 29.5].copy()
-        else:
-            print("등락률 컬럼을 찾을 수 없습니다.")
+        results = []
+
+        for market_id, market_name in [("STK", "KOSPI"), ("KSQ", "KOSDAQ")]:
+            payload = {
+                "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
+                "locale": "ko_KR",
+                "mktId": market_id,
+                "trdDd": today,
+                "share": "1",
+                "money": "1",
+                "csvxls_isNo": "false"
+            }
+
+            res = requests.post(url, data=payload, headers=headers, timeout=10)
+            data = res.json()
+
+            if 'OutBlock_1' not in data:
+                print(f"{market_name} 데이터 없음")
+                continue
+
+            df = pd.DataFrame(data['OutBlock_1'])
+            print(f"{market_name} 수집 완료: {len(df)}개")
+
+            # 등락률 컬럼 확인 및 상한가 필터
+            # KRX 컬럼명: FLUC_RT (등락률)
+            if 'FLUC_RT' in df.columns:
+                df['FLUC_RT'] = pd.to_numeric(df['FLUC_RT'], errors='coerce')
+                upper = df[df['FLUC_RT'] >= 29.5].copy()
+                upper['market'] = market_name
+                results.append(upper)
+                print(f"{market_name} 상한가: {len(upper)}개")
+            else:
+                print(f"컬럼 목록: {df.columns.tolist()}")
+
+            time.sleep(0.5)
+
+        if not results:
             return pd.DataFrame()
 
-        upper = upper.reset_index()
-        print(f"상한가 종목 {len(upper)}개 발견")
-        return upper
+        final_df = pd.concat(results, ignore_index=True)
+        print(f"전체 상한가 종목: {len(final_df)}개")
+        return final_df
 
     except Exception as e:
         print(f"상한가 수집 오류: {e}")
@@ -54,7 +89,7 @@ def get_upper_limit_stocks():
 
 
 def get_financial_data(ticker, stock_name):
-    """재무 데이터 수집"""
+    """재무 데이터 수집 (DART)"""
     result = {
         '시가총액': '-', 'PER': '-', '매출성장률': '-',
         '영업이익률': '-', '영업이익성장률': '-',
@@ -62,19 +97,38 @@ def get_financial_data(ticker, stock_name):
     }
 
     try:
-        # 시가총액, PER
-        krx = fdr.StockListing('KRX')
-        row = krx[krx['Code'] == ticker]
-        if not row.empty:
-            if 'Marcap' in row.columns:
-                cap = row.iloc[0]['Marcap']
-                if pd.notna(cap):
-                    result['시가총액'] = f"{int(cap) / 1e8:.0f}억원"
-            if 'PER' in row.columns:
-                per = row.iloc[0]['PER']
-                if pd.notna(per) and float(per) > 0:
+        # KRX에서 시가총액, PER 가져오기
+        today = get_today()
+        url = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "http://data.krx.co.kr"
+        }
+        payload = {
+            "bld": "dbms/MDC/STAT/standard/MDCSTAT03501",
+            "locale": "ko_KR",
+            "trdDd": today,
+            "strtCd": ticker,
+            "endCd": ticker,
+            "csvxls_isNo": "false"
+        }
+        res = requests.post(url, data=payload, headers=headers, timeout=10)
+        data = res.json()
+
+        if 'OutBlock_1' in data and data['OutBlock_1']:
+            row = data['OutBlock_1'][0]
+            # 시가총액
+            if 'MKTCAP' in row:
+                cap = float(str(row['MKTCAP']).replace(',', ''))
+                result['시가총액'] = f"{cap / 1e8:.0f}억원"
+            # PER
+            if 'PER' in row:
+                per = row['PER']
+                if per and per != '-':
                     result['PER'] = f"{float(per):.1f}"
+
         time.sleep(0.5)
+
     except Exception as e:
         print(f"시가총액/PER 오류 ({stock_name}): {e}")
 
@@ -193,21 +247,23 @@ def send_telegram(message):
 
 
 def main():
-    today = "2026년 06월 05일"
+    date_str = get_today()
+    today_display = f"{date_str[:4]}년 {date_str[4:6]}월 {date_str[6:]}일"
+
     upper_df = get_upper_limit_stocks()
 
     if upper_df.empty:
-        send_telegram(f"📊 {today}\n오늘 상한가 종목이 없습니다.")
+        send_telegram(f"📊 {today_display}\n오늘 상한가 종목이 없습니다.")
         print("상한가 종목 없음. 종료.")
         return
 
-    msg = f"📈 *{today} 상한가 종목*\n총 {len(upper_df)}개\n━━━━━━━━━━━━━━\n\n"
+    msg = f"📈 *{today_display} 상한가 종목*\n총 {len(upper_df)}개\n━━━━━━━━━━━━━━\n\n"
 
     for _, row in upper_df.iterrows():
-        ticker = row.get('Code', row.get('티커', ''))
-        name = row.get('Name', row.get('종목명', ticker))
-        rate = row.get('등락률', 0)
-        volume = row.get('Volume', row.get('거래량', 0))
+        ticker = row.get('ISU_SRT_CD', row.get('Code', ''))
+        name = row.get('ISU_ABBRV', row.get('Name', ticker))
+        rate = float(str(row.get('FLUC_RT', 0)).replace(',', ''))
+        volume = row.get('ACC_TRDVOL', row.get('Volume', 0))
 
         print(f"{name} 처리 중...")
         financial = get_financial_data(ticker, name)
@@ -217,7 +273,7 @@ def main():
         summary = get_ai_summary(name, news, financial)
 
         msg += f"*{name}* (+{rate:.1f}%)\n"
-        msg += f"거래량: {int(volume):,}주\n"
+        msg += f"거래량: {volume}주\n"
         msg += f"시가총액: {financial['시가총액']} | PER: {financial['PER']} | PEG: {financial['PEG']}\n"
         msg += f"ROE: {financial['ROE']} | 부채비율: {financial['부채비율']} | 현금: {financial['현금보유량']}\n"
         msg += f"매출성장률: {financial['매출성장률']} | 영업이익률: {financial['영업이익률']} | 영업이익성장률: {financial['영업이익성장률']}\n"
