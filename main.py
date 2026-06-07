@@ -2,7 +2,7 @@ import os
 import time
 from datetime import datetime
 import pandas as pd
-import dart_fss as dart_lib
+import OpenDartReader
 from openai import OpenAI
 import requests
 from bs4 import BeautifulSoup
@@ -14,7 +14,7 @@ OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
 DART_API_KEY = os.environ['DART_API_KEY']
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-dart_lib.set_api_key(DART_API_KEY)
+dart = OpenDartReader.OpenDartReader(DART_API_KEY)
 
 # 테스트용 날짜 고정 (실제 운영시 None으로 변경)
 TEST_DATE = "20260605"  # None 으로 바꾸면 오늘 날짜 자동 적용
@@ -135,24 +135,28 @@ def get_financial_data(ticker, stock_name):
 
     try:
         # DART 재무데이터 - load_fs → fs 로 수정
-        corp_list = dart_lib.get_corp_list()
-        corp = corp_list.find_by_stock_code(ticker)
-        if not corp:
-            print(f"DART 종목 없음: {stock_name}")
-            return result
+        current_year = str(datetime.now().year - 1)
+        prev_year = str(datetime.now().year - 2)
 
-        current_year = datetime.now().year - 1
-        prev_year = datetime.now().year - 2
-
-        # load_fs 대신 fs 사용
-        fs_current = corp.fs(bgn_de=f'{current_year}0101')
+        # 연결재무제표 우선, 없으면 별도재무제표
+        fs_current = dart.finstate(stock_name, current_year, fs_div='CFS')
+        if fs_current is None or fs_current.empty:
+            fs_current = dart.finstate(stock_name, current_year, fs_div='OFS')
         time.sleep(0.5)
-        fs_prev = corp.fs(bgn_de=f'{prev_year}0101')
+
+        fs_prev = dart.finstate(stock_name, prev_year, fs_div='CFS')
+        if fs_prev is None or fs_prev.empty:
+            fs_prev = dart.finstate(stock_name, prev_year, fs_div='OFS')
 
         def get_account(fs, label):
             try:
-                val = fs[label].iloc[-1]
-                return float(val) if pd.notna(val) else None
+                if fs is None or fs.empty:
+                    return None
+                row = fs[fs['account_nm'].str.contains(label, na=False)]
+                if row.empty:
+                    return None
+                val = row.iloc[0]['thstrm_amount']
+                return float(str(val).replace(',', ''))
             except:
                 return None
 
