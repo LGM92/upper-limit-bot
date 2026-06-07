@@ -153,13 +153,18 @@ def get_financial_data(ticker, stock_name):
 
         def get_account(fs, label):
             try:
-                if fs is None or fs.empty:
+                if fs is None or len(fs) == 0:
                     return None
                 row = fs[fs['account_nm'].str.contains(label, na=False)]
                 if row.empty:
                     return None
                 val = row.iloc[0]['thstrm_amount']
-                return float(str(val).replace(',', ''))
+                if pd.isna(val):
+                    return None
+                val = str(val).replace(',', '').strip()
+                if val in ['', '-', 'nan']:
+                    return None
+                return float(val)
             except:
                 return None
 
@@ -167,7 +172,11 @@ def get_financial_data(ticker, stock_name):
         op_income_cur = get_account(fs_current, '영업이익')
         total_debt = get_account(fs_current, '부채총계')
         total_equity = get_account(fs_current, '자본총계')
-        cash = get_account(fs_current, '현금및현금성자산')
+        cash = (
+            get_account(fs_current, '현금및현금성자산')
+            or get_account(fs_current, '현금성자산')
+            or get_account(fs_current, '현금')
+        )
         net_income = get_account(fs_current, '당기순이익')
         revenue_prev = get_account(fs_prev, '매출액')
         op_income_prev = get_account(fs_prev, '영업이익')
@@ -240,7 +249,7 @@ def get_dart_disclosure(ticker, stock_name):
         today_fmt = f"{today[:4]}-{today[4:6]}-{today[6:]}"
         week_fmt = f"{week_ago[:4]}-{week_ago[4:6]}-{week_ago[6:]}"
 
-        disclosures = dart.list(ticker, bgnde=week_fmt, endde=today_fmt)
+        disclosures = dart.list(ticker, start=week_fmt, end=today_fmt)
 
         if disclosures is None or disclosures.empty:
             return "최근 7일 공시 없음"
@@ -277,10 +286,10 @@ def get_ai_summary(stock_name, news_text, disclosure_text, financial):
 - 부채비율: {financial['부채비율']} / 현금보유량: {financial['현금보유량']}
 
 규칙:
-1. 반드시 뉴스/공시에 나온 내용만 근거로 작성
-2. "추정", "가능성", "부각" 표현 사용 (단정 금지)
-3. 확실하지 않으면 "원인 확인 불가" 작성
-4. 절대 단정하지 말 것
+1. 반드시 제공된 뉴스 제목과 공시에 근거해서만 작성
+2. 명확한 근거가 없으면 "원인 불명"이라고 답할 것
+3. 추측 금지. 절대 단정하지 말 것
+4. 불확실한 내용은 "추정", "가능성" 표현 사용
 
 아래 형식으로 답변:
 
