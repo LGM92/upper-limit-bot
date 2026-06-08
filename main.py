@@ -151,13 +151,10 @@ def news_score(title, source=""):
 def get_news(stock_name):
     """구글 뉴스 RSS 수집 + 품질 필터"""
     try:
-        if len(stock_name) <= 2:
-            query = f'"{stock_name}" 코스닥'.replace(" ", "+")
-        else:
-            query = f'"{stock_name}"'.replace(" ", "+")
+        query = f'"{stock_name}" 상한가'.replace(" ", "+")
         url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
         feed = feedparser.parse(url)
-
+        
         news_list = []
         for entry in feed.entries[:15]:
             title = entry.title
@@ -217,22 +214,25 @@ def has_reason_news(news_list):
 
 
 def generate_summary(news_list, disclosure_list):
-    """뉴스 우선, 상한가 결과만 말하는 기사 제외, 근거 없으면 원인 불명"""
-    # 원인 키워드 있고, BAD_TITLE_PATTERNS 없는 뉴스 우선
-    for news in news_list:
-        if (any(k in news for k in REASON_KEYWORDS) and
-                not any(p in news for p in BAD_TITLE_PATTERNS)):
-            return news
+    """공시 우선 → 특징주/급등 기사 → 일반 뉴스 → 원인 불명"""
 
-    # 위 조건 없어도 BAD_TITLE_PATTERNS만 없으면 사용
-    for news in news_list:
-        if not any(p in news for p in BAD_TITLE_PATTERNS):
-            return news
-
-    # 공시 fallback
+    # 1. 공시 우선
     if disclosure_list:
         return disclosure_list[0]
 
+    # 2. 특징주/상한가/급등 기사 중 BAD_TITLE_PATTERNS 없는 것
+    PRIORITY_KEYWORDS = ["특징주", "급등", "강세", "상한가"]
+    for news in news_list:
+        if (any(k in news for k in PRIORITY_KEYWORDS) and
+                not any(p in news for p in BAD_TITLE_PATTERNS)):
+            return news
+
+    # 3. REASON_KEYWORDS 포함된 일반 뉴스
+    for news in news_list:
+        if any(k in news for k in REASON_KEYWORDS):
+            return news
+
+    # 4. 원인 불명
     return "관련 원인 기사 확인되지 않음"
 
 
