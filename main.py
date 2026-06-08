@@ -57,6 +57,20 @@ IMPORTANT_DISCLOSURES = [
     "자기주식취득", "합병", "분할", "임상", "특허", "계약"
 ]
 
+# 공시 중요도 점수
+DISCLOSURE_SCORES = {
+    "임상": 50,
+    "합병": 40,
+    "인수": 40,
+    "사업 선정": 40,
+    "영업양수": 40,
+    "유상증자": 30,
+    "공급계약": 20,
+    "수주": 20,
+    "자기주식취득": 15,
+    "특허": 15,
+}
+
 # 원인 분류 (복수 허용, M&A 우선)
 CATEGORY_RULES = {
     "M&A": ["합병", "인수", "영업양수", "영업양도"],
@@ -155,16 +169,25 @@ def get_news(stock_name):
         # 스코어링: 원인 키워드 + 날짜 가중치
         from email.utils import parsedate_to_datetime
 
+        # 키워드 점수표
+        KEYWORD_SCORES = {
+            "인수": 30, "합병": 30, "정부선정": 30, "사업 선정": 30,
+            "수주": 20, "계약": 20, "개발": 20, "특허": 15,
+            "투자": 15, "출시": 15, "임상": 20, "공장": 15,
+            "특징주": 10, "AI": 10,
+            "상한가": -10, "VI 발동": -20, "52주 신고가": -20,
+            "체결강도": -30, "매수잔량": -30, "매도잔량": -30,
+            "급등세": -10, "3연상": -15, "2연속": -15,
+        }
+
         def score_news(item):
             title, published = item
             score = 0
 
-            for k in GOOD_REASON_KEYWORDS:
-                if k in title:
-                    score += 20
-            for k in BAD_REASON_KEYWORDS:
-                if k in title:
-                    score -= 15
+            # 키워드 점수
+            for keyword, pts in KEYWORD_SCORES.items():
+                if keyword in title:
+                    score += pts
 
             # 날짜 가중치
             try:
@@ -209,6 +232,16 @@ def get_dart_disclosure(ticker, stock_name):
 
         all_titles = disclosures['report_nm'].tolist()
         important = [t for t in all_titles if any(k in t for k in IMPORTANT_DISCLOSURES)]
+
+        # 공시 점수화 후 정렬
+        def score_disclosure(title):
+            score = 0
+            for keyword, pts in DISCLOSURE_SCORES.items():
+                if keyword in title:
+                    score += pts
+            return score
+
+        important = sorted(important, key=score_disclosure, reverse=True)
         return important[:3] if important else []
 
     except Exception as e:
