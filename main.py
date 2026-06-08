@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from datetime import datetime, timedelta
 import pandas as pd
@@ -129,8 +130,7 @@ def get_news(stock_name):
     """구글 뉴스 RSS - 종목명 포함 + 품질 필터"""
     try:
         query = f'"{stock_name}"'.replace(" ", "+")
-        # after: 파라미터로 최근 3일 기사만 가져오기
-        url = f"https://news.google.com/rss/search?q={query}+after:3d&hl=ko&gl=KR&ceid=KR:ko"
+        url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
         feed = feedparser.parse(url)
 
         filtered = []
