@@ -22,6 +22,12 @@ BAD_KEYWORDS = [
     "주가분석", "주가전망", "주가 왜", "무슨 회사"
 ]
 
+BAD_TITLE_PATTERNS = [
+    "상한가", "52주 신고가", "상승률 상위",
+    "거래량 증가", "VI 발동", "급등세", "주가 왜",
+    "주가 상한가", "상한가 마감", "상한가 직행"
+]
+
 # 우량 언론사 (점수 +10)
 GOOD_MEDIA = [
     "연합뉴스", "한국경제", "매일경제", "이데일리",
@@ -145,7 +151,10 @@ def news_score(title, source=""):
 def get_news(stock_name):
     """구글 뉴스 RSS 수집 + 품질 필터"""
     try:
-        query = f'"{stock_name}"'.replace(" ", "+")
+        if len(stock_name) <= 2:
+            query = f'"{stock_name}" 코스닥'.replace(" ", "+")
+        else:
+            query = f'"{stock_name}"'.replace(" ", "+")
         url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
         feed = feedparser.parse(url)
 
@@ -208,15 +217,23 @@ def has_reason_news(news_list):
 
 
 def generate_summary(news_list, disclosure_list):
-    """뉴스 우선, 근거 없으면 원인 불명"""
-    if has_reason_news(news_list):
-        # 원인 키워드 포함된 뉴스 중 첫 번째
-        for news in news_list:
-            if any(k in news for k in REASON_KEYWORDS):
-                return news
+    """뉴스 우선, 상한가 결과만 말하는 기사 제외, 근거 없으면 원인 불명"""
+    # 원인 키워드 있고, BAD_TITLE_PATTERNS 없는 뉴스 우선
+    for news in news_list:
+        if (any(k in news for k in REASON_KEYWORDS) and
+                not any(p in news for p in BAD_TITLE_PATTERNS)):
+            return news
+
+    # 위 조건 없어도 BAD_TITLE_PATTERNS만 없으면 사용
+    for news in news_list:
+        if not any(p in news for p in BAD_TITLE_PATTERNS):
+            return news
+
+    # 공시 fallback
     if disclosure_list:
         return disclosure_list[0]
-    return "원인 불명"
+
+    return "관련 원인 기사 확인되지 않음"
 
 
 def send_telegram(message):
