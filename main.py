@@ -18,27 +18,12 @@ DART_API_KEY = os.environ['DART_API_KEY']
 client = OpenAI(api_key=OPENAI_API_KEY)
 dart = OpenDartReader(DART_API_KEY)
 
-TEST_DATE = None  # 테스트시 "20260605", 운영시 None
+TEST_DATE = None  # 테스트시 "20260608", 운영시 None
 
-# 저품질/무관 뉴스 필터
+# 저품질 뉴스 필터
 BAD_KEYWORDS = [
-    "투자분석", "주달", "톺아보기", "민낯", "수급포착",
-    "주가분석", "주가전망", "대박", "추천주", "내일장",
+    "투자분석", "주달", "대박", "추천주", "내일장",
     "종목은?", "예감", "급등예상", "수익률", "오늘의 주식"
-]
-
-# 요약으로 쓰면 안 되는 시황성 제목
-BAD_TITLE_PATTERNS = [
-    "52주 신고가", "상승률 상위", "거래량 증가",
-    "VI 발동", "+29", "+30", "% 상승"
-]
-
-# 우량 언론사
-GOOD_MEDIA = [
-    "연합뉴스", "한국경제", "매일경제", "이데일리",
-    "머니투데이", "서울경제", "조선비즈", "전자신문",
-    "딜사이트", "뉴스1", "헤럴드경제", "파이낸셜뉴스",
-    "비즈니스워치", "더벨", "약업신문", "전자부품"
 ]
 
 # 중요 공시 키워드
@@ -48,12 +33,12 @@ IMPORTANT_DISCLOSURES = [
     "자기주식취득", "합병", "분할", "임상", "특허", "계약"
 ]
 
-# 원인 분류 (M&A 우선)
+# 원인 분류 (복수 허용, M&A 우선)
 CATEGORY_RULES = {
     "M&A": ["합병", "인수", "영업양수", "영업양도"],
     "수급": ["자기주식취득", "자사주"],
     "정책수혜": ["국토부", "정부", "정책", "사업 선정", "수주"],
-    "로봇": ["로봇", "휴머노이드", "감속기", "자율주행"],
+    "로봇": ["로봇", "휴머노이드", "감속기", "보스턴다이나믹스", "아틀라스", "액추에이터"],
     "AI": ["AI", "인공지능", "LLM"],
     "반도체": ["반도체", "MLCC", "웨이퍼"],
     "바이오": ["비만", "임상", "신약", "치료제", "바이오", "제약"],
@@ -127,49 +112,23 @@ def get_upper_limit_stocks():
 
 
 def get_news(stock_name):
-    """구글 뉴스 RSS - 종목명 포함 + 품질 필터"""
+    """구글 뉴스 RSS 수집 - 기본 필터만"""
     try:
         query = f'"{stock_name}"'.replace(" ", "+")
         url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
         feed = feedparser.parse(url)
 
-        filtered = []
-        for entry in feed.entries[:30]:
+        news_list = []
+        for entry in feed.entries[:20]:
             title = entry.title
 
-            # source 추출
-            source = ""
-            try:
-                source = entry.source.title
-            except:
-                pass
-
-            # 1. 종목명 포함 여부 (공백 앞뒤로 정확히 매칭)
-            # 예: "엔피" → "엔피디" 같은 유사 종목명 오염 방지
-            import re
-            if not re.search(r'(?<!\w)' + re.escape(stock_name) + r'(?!\w)', title):
-                continue
-
-            # 2. 저품질 키워드 제거
+            # 저품질 키워드 제거
             if any(k in title for k in BAD_KEYWORDS):
                 continue
 
-            # 3. 시황성 제목 제거
-            if any(p in title for p in BAD_TITLE_PATTERNS):
-                continue
+            news_list.append(title)
 
-            filtered.append((title, source))
-
-        # 우량 언론사 우선 정렬
-        def media_score(item):
-            title, source = item
-            for media in GOOD_MEDIA:
-                if media in source or media in title:
-                    return 1
-            return 0
-
-        filtered = sorted(filtered, key=media_score, reverse=True)[:5]
-        return [title for title, source in filtered]
+        return news_list[:10]
 
     except Exception as e:
         print(f"뉴스 오류 ({stock_name}): {e}")
@@ -200,26 +159,19 @@ def get_dart_disclosure(ticker, stock_name):
         return []
 
 
-def classify_reason(summary):
-    """요약 텍스트만 보고 분류 - 뉴스 전체 아님"""
-    for category, keywords in CATEGORY_RULES.items():
-        if any(k in summary for k in keywords):
-            return category
-    return "기타"
-
-
-def get_ai_summary(stock_name, news_list, disclosure_list):
-    """GPT - 기사 제목 압축만, 추론 금지"""
+def gpt_filter_news(stock_name, news_list, disclosure_list):
+    """GPT 1단계: 주가 원인 관련 기사만 선별"""
     try:
-        # 공시 있으면 공시 우선으로 GPT에 전달
-        if disclosure_list:
-            source_text = "[공시]\n" + "\n".join(disclosure_list)
-            if news_list:
-                source_text += "\n\n[뉴스]\n" + "\n".join(news_list[:3])
-        elif news_list:
-            source_text = "[뉴스]\n" + "\n".join(news_list[:5])
-        else:
-            return "관련 원인 기사 확인되지 않음"
+        if not news_list and not disclosure_list:
+            return [], []
+
+        # 번호 붙여서 전달
+        numbered = []
+        for i, n in enumerate(news_list, 1):
+            numbered.append(f"{i}. {n}")
+
+        news_text = "\n".join(numbered) if numbered else "없음"
+        disclosure_text = "\n".join(disclosure_list) if disclosure_list else "없음"
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -228,30 +180,97 @@ def get_ai_summary(stock_name, news_list, disclosure_list):
                 "role": "user",
                 "content": f"""종목명: {stock_name}
 
+공시:
+{disclosure_text}
+
+뉴스 목록:
+{news_text}
+
+위 뉴스 중 "{stock_name}" 주가 상승 원인을 설명하는 기사의 번호만 골라라.
+연예인, 인물 소식, 체결강도, 매수잔량, 매도잔량, 실적 발표(원인 아님) 등은 제외.
+원인 기사가 없으면 "없음"만 출력.
+
+출력 형식: 번호만 쉼표로 구분
+예시: 2,4,7
+또는: 없음"""
+            }]
+        )
+
+        result = response.choices[0].message.content.strip()
+        print(f"[GPT필터] {stock_name}: {result}")
+
+        if result == "없음" or not result:
+            return [], disclosure_list
+
+        # 선택된 번호 파싱
+        selected = []
+        for num in result.replace(" ", "").split(","):
+            try:
+                idx = int(num) - 1
+                if 0 <= idx < len(news_list):
+                    selected.append(news_list[idx])
+            except:
+                continue
+
+        return selected, disclosure_list
+
+    except Exception as e:
+        print(f"GPT필터 오류 ({stock_name}): {e}")
+        return news_list[:3], disclosure_list
+
+
+def gpt_summarize(stock_name, filtered_news, disclosure_list):
+    """GPT 2단계: 원인 1줄 요약 + 분류"""
+    try:
+        if not filtered_news and not disclosure_list:
+            return "원인 불명", "기타"
+
+        if disclosure_list:
+            source_text = "[공시]\n" + "\n".join(disclosure_list)
+            if filtered_news:
+                source_text += "\n\n[뉴스]\n" + "\n".join(filtered_news[:3])
+        else:
+            source_text = "[뉴스]\n" + "\n".join(filtered_news[:3])
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=150,
+            messages=[{
+                "role": "user",
+                "content": f"""종목명: {stock_name}
+
 {source_text}
 
 규칙:
-1. 위 공시/뉴스 제목에 있는 내용만 사용
-2. 추론 금지. 없는 내용 추가 금지
-3. 아래 표현 절대 사용 금지:
-   - "시장 기대감", "투자심리", "수급"
-   - "매도잔량", "체결강도", "거래량"
-   - "상한가", "급등", "강세"
-4. 한 줄로만 출력 (30자 이내)
-5. 기업 이벤트(계약/개발/선정/합병/임상)가 없으면 반드시 "원인 불명"만 출력
+1. 위 내용에 있는 사실만 사용
+2. 추론 금지
+3. "시장 기대감", "투자심리" 같은 일반론 금지
+4. 근거 없으면 "원인 불명"
 
-출력 예시:
-웨이퍼 로봇 기업 인수 및 티아이에스 지분 취득
-국토부 AI시티 혁신기술 사업 선정
-4중 작용 비만치료제 전임상 결과 발표
-원인 불명"""
+아래 형식으로만 출력:
+요약: (30자 이내 한 줄)
+분류: AI/반도체/바이오/로봇/정책수혜/M&A/수급/실적개선/기타 중 해당하는 것 최대 2개를 "/" 로 구분"""
             }]
         )
-        return response.choices[0].message.content.strip()
+
+        text = response.choices[0].message.content.strip()
+        print(f"[GPT요약] {stock_name}: {text}")
+
+        # 파싱
+        summary = "원인 불명"
+        category = "기타"
+
+        for line in text.split("\n"):
+            if line.startswith("요약:"):
+                summary = line.replace("요약:", "").strip()
+            elif line.startswith("분류:"):
+                category = line.replace("분류:", "").strip()
+
+        return summary, category
 
     except Exception as e:
-        print(f"GPT 오류 ({stock_name}): {e}")
-        return "원인 불명"
+        print(f"GPT요약 오류 ({stock_name}): {e}")
+        return "원인 불명", "기타"
 
 
 def send_telegram(message):
@@ -280,19 +299,26 @@ def main():
 
         print(f"\n{'='*30}\n{name} 처리 중...")
 
+        # 뉴스 수집
         news_list = get_news(name)
-        print(f"[뉴스] {news_list}")
+        print(f"[뉴스수집] {len(news_list)}개")
         time.sleep(1)
 
+        # 공시 수집
         disclosure_list = get_dart_disclosure(ticker, name)
         print(f"[공시] {disclosure_list}")
         time.sleep(0.5)
 
-        summary = get_ai_summary(name, news_list, disclosure_list)
-        category = classify_reason(summary)
+        # GPT 1단계: 원인 기사 필터링
+        filtered_news, disclosure_list = gpt_filter_news(name, news_list, disclosure_list)
+        print(f"[필터후] {filtered_news}")
+        time.sleep(1)
 
-        print(f"[요약] {summary} / [분류] {category}")
+        # GPT 2단계: 요약 + 분류
+        summary, category = gpt_summarize(name, filtered_news, disclosure_list)
+        time.sleep(1)
 
+        # 메시지 조합
         msg += f"━━━━━━━━━━━━━━\n"
         msg += f"*{name}* (+{rate:.1f}%)\n\n"
         msg += f"📌 *요약*\n{summary}\n\n"
@@ -304,13 +330,17 @@ def main():
                 msg += f"• {d}\n"
             msg += "\n"
 
-        if news_list:
+        if filtered_news:
+            msg += f"📰 *관련 뉴스*\n"
+            for n in filtered_news[:3]:
+                msg += f"• {n}\n"
+            msg += "\n"
+        elif news_list:
+            # 필터 후 원인 기사 없어도 뉴스는 표시
             msg += f"📰 *관련 뉴스*\n"
             for n in news_list[:3]:
                 msg += f"• {n}\n"
             msg += "\n"
-
-        time.sleep(1)
 
     for i in range(0, len(msg), 4000):
         send_telegram(msg[i:i+4000])
