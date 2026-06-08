@@ -14,7 +14,7 @@ DART_API_KEY = os.environ['DART_API_KEY']
 
 dart = OpenDartReader(DART_API_KEY)
 
-TEST_DATE = None  # 테스트시 "20260605", 운영시 None
+TEST_DATE = "20260605"  # 테스트시 "20260605", 운영시 None
 
 # 저품질 뉴스 필터
 BAD_KEYWORDS = [
@@ -35,16 +35,24 @@ IMPORTANT_DISCLOSURES = [
     "자기주식취득", "합병", "분할", "임상", "특허", "계약"
 ]
 
-# 원인 분류 키워드 매핑
+# 원인 분류 키워드 매핑 (M&A, 수급 정교화)
 CATEGORY_RULES = {
     "AI": ["AI", "인공지능", "LLM", "ChatGPT"],
     "반도체": ["반도체", "MLCC", "삼성전자", "삼성전기", "SK하이닉스"],
     "바이오": ["비만", "임상", "신약", "치료제", "의약", "바이오", "제약"],
+    "로봇": ["로봇", "휴머노이드", "감속기", "자율주행"],
     "정책수혜": ["국토부", "정부", "정책", "사업 선정", "수주"],
-    "M&A": ["합병", "인수", "지분", "M&A"],
-    "수급": ["자기주식", "자사주", "대량보유"],
+    "M&A": ["합병", "인수", "영업양수", "영업양도"],
+    "수급": ["자기주식취득", "자사주"],
     "실적개선": ["실적", "흑자", "매출", "영업이익"]
 }
+
+# 원인으로 인정할 뉴스 키워드
+REASON_KEYWORDS = [
+    "특징주", "수주", "계약", "선정", "개발", "합병", "인수",
+    "임상", "신약", "치료제", "공장", "증설", "공급", "상한가",
+    "급등", "감속기", "휴머노이드", "AI", "반도체", "바이오"
+]
 
 
 def get_today():
@@ -116,15 +124,21 @@ def get_upper_limit_stocks():
         return pd.DataFrame()
 
 
-def news_score(title):
-    """뉴스 품질 점수"""
+def news_score(title, source=""):
+    """뉴스 품질 점수 - source 우선 활용"""
     score = 0
+    check_text = source + " " + title
     for media in GOOD_MEDIA:
-        if media in title:
+        if media in check_text:
             score += 10
     for bad in BAD_KEYWORDS:
         if bad in title:
             score -= 10
+    # 원인 키워드 있으면 가산점
+    for keyword in REASON_KEYWORDS:
+        if keyword in title:
+            score += 5
+            break
     return score
 
 
@@ -138,12 +152,13 @@ def get_news(stock_name):
         news_list = []
         for entry in feed.entries[:15]:
             title = entry.title
+            source = entry.get("source", {}).get("title", "") if hasattr(entry, "get") else ""
             if not any(k in title for k in BAD_KEYWORDS):
-                news_list.append(title)
+                news_list.append((title, source))
 
         # 품질 점수 기준 정렬 후 상위 3개
-        news_list = sorted(news_list, key=news_score, reverse=True)[:3]
-        return news_list
+        news_list = sorted(news_list, key=lambda x: news_score(x[0], x[1]), reverse=True)[:3]
+        return [title for title, source in news_list]
 
     except Exception as e:
         print(f"뉴스 오류 ({stock_name}): {e}")
@@ -184,12 +199,23 @@ def classify_reason(news_list, disclosure_list):
     return "기타"
 
 
+def has_reason_news(news_list):
+    """원인으로 인정할 수 있는 뉴스인지 확인"""
+    for news in news_list:
+        if any(k in news for k in REASON_KEYWORDS):
+            return True
+    return False
+
+
 def generate_summary(news_list, disclosure_list):
-    """GPT 없이 공시/뉴스 제목으로 요약 생성"""
+    """뉴스 우선, 근거 없으면 원인 불명"""
+    if has_reason_news(news_list):
+        # 원인 키워드 포함된 뉴스 중 첫 번째
+        for news in news_list:
+            if any(k in news for k in REASON_KEYWORDS):
+                return news
     if disclosure_list:
         return disclosure_list[0]
-    if news_list:
-        return news_list[0]
     return "원인 불명"
 
 
