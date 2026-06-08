@@ -3,7 +3,7 @@ name: 상한가 분석 봇
 on:
   schedule:
     # 매일 오후 4시 실행 (KST 16:00 = UTC 07:00)
-    - cron: '0 7 * * 1-5'  # 월~금만 실행
+    - cron: '37 8 * * 1-5'  # 월~금만 실행
   workflow_dispatch:  # 수동 실행 버튼도 활성화
 
 jobs:
