@@ -129,7 +129,8 @@ def get_news(stock_name):
     """구글 뉴스 RSS - 종목명 포함 + 품질 필터"""
     try:
         query = f'"{stock_name}"'.replace(" ", "+")
-        url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
+        # after: 파라미터로 최근 3일 기사만 가져오기
+        url = f"https://news.google.com/rss/search?q={query}+after:3d&hl=ko&gl=KR&ceid=KR:ko"
         feed = feedparser.parse(url)
 
         filtered = []
@@ -143,8 +144,10 @@ def get_news(stock_name):
             except:
                 pass
 
-            # 1. 종목명 포함 여부
-            if stock_name not in title:
+            # 1. 종목명 포함 여부 (공백 앞뒤로 정확히 매칭)
+            # 예: "엔피" → "엔피디" 같은 유사 종목명 오염 방지
+            import re
+            if not re.search(r'(?<!\w)' + re.escape(stock_name) + r'(?!\w)', title):
                 continue
 
             # 2. 저품질 키워드 제거
@@ -230,14 +233,18 @@ def get_ai_summary(stock_name, news_list, disclosure_list):
 규칙:
 1. 위 공시/뉴스 제목에 있는 내용만 사용
 2. 추론 금지. 없는 내용 추가 금지
-3. "시장 기대감", "투자심리" 같은 일반론 금지
+3. 아래 표현 절대 사용 금지:
+   - "시장 기대감", "투자심리", "수급"
+   - "매도잔량", "체결강도", "거래량"
+   - "상한가", "급등", "강세"
 4. 한 줄로만 출력 (30자 이내)
-5. 근거 없으면 "원인 불명"만 출력
+5. 기업 이벤트(계약/개발/선정/합병/임상)가 없으면 반드시 "원인 불명"만 출력
 
 출력 예시:
 웨이퍼 로봇 기업 인수 및 티아이에스 지분 취득
 국토부 AI시티 혁신기술 사업 선정
-4중 작용 비만치료제 전임상 결과 발표"""
+4중 작용 비만치료제 전임상 결과 발표
+원인 불명"""
             }]
         )
         return response.choices[0].message.content.strip()
