@@ -22,11 +22,32 @@ BAD_KEYWORDS = [
     "주가분석", "주가전망", "주가 왜", "무슨 회사"
 ]
 
+# 요약으로 쓰면 안 되는 제목 패턴
 BAD_TITLE_PATTERNS = [
     "상한가", "52주 신고가", "상승률 상위",
     "거래량 증가", "VI 발동", "급등세", "주가 왜",
-    "주가 상한가", "상한가 마감", "상한가 직행"
+    "주가 상한가", "상한가 마감", "상한가 직행",
+    "+29", "+30", "% 상승", "% 올라"
 ]
+
+# 원인 우선 키워드 (특징주 기사 선택용)
+PRIORITY_KEYWORDS = [
+    "특징주", "수주", "계약", "개발", "선정",
+    "인수", "합병", "임상", "신약", "공장", "증설",
+    "공급", "수혜", "출시", "승인"
+]
+
+# 원인 분류 (M&A 우선으로 순서 변경)
+CATEGORY_RULES = {
+    "M&A": ["합병", "인수", "영업양수", "영업양도"],
+    "수급": ["자기주식취득", "자사주"],
+    "정책수혜": ["국토부", "정부", "정책", "사업 선정", "수주"],
+    "로봇": ["로봇", "휴머노이드", "감속기", "자율주행"],
+    "AI": ["AI", "인공지능", "LLM", "ChatGPT"],
+    "반도체": ["반도체", "MLCC", "삼성전자", "삼성전기", "SK하이닉스"],
+    "바이오": ["비만", "임상", "신약", "치료제", "의약", "바이오", "제약"],
+    "실적개선": ["실적", "흑자", "영업이익"]
+}
 
 # 우량 언론사 (점수 +10)
 GOOD_MEDIA = [
@@ -151,25 +172,41 @@ def news_score(title, source=""):
 def get_news(stock_name):
     """구글 뉴스 RSS 수집 + 품질 필터"""
     try:
-        query = f'"{stock_name}" 상한가'.replace(" ", "+")
+        # 종목명만 검색 (상한가 추가시 시황기사만 나옴)
+        query = f'"{stock_name}"'.replace(" ", "+")
         url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
         feed = feedparser.parse(url)
-        
-        news_list = []
-        for entry in feed.entries[:15]:
+
+        filtered = []
+        for entry in feed.entries[:30]:
             title = entry.title
-            source = entry.get("source", {}).get("title", "") if hasattr(entry, "get") else ""
-            if not any(k in title for k in BAD_KEYWORDS):
-                news_list.append((title, source))
+            source = ""
+            try:
+                source = entry.source.title
+            except:
+                pass
+
+            # 1. 종목명 포함 여부 확인
+            if stock_name not in title:
+                continue
+
+            # 2. 저품질 키워드 제거
+            if any(k in title for k in BAD_KEYWORDS):
+                continue
+
+            # 3. 상한가/시황 기사 제거
+            if any(p in title for p in BAD_TITLE_PATTERNS):
+                continue
+
+            filtered.append((title, source))
 
         # 품질 점수 기준 정렬 후 상위 3개
-        news_list = sorted(news_list, key=lambda x: news_score(x[0], x[1]), reverse=True)[:3]
-        return [title for title, source in news_list]
+        filtered = sorted(filtered, key=lambda x: news_score(x[0], x[1]), reverse=True)[:3]
+        return [title for title, source in filtered]
 
     except Exception as e:
         print(f"뉴스 오류 ({stock_name}): {e}")
         return []
-
 
 def get_dart_disclosure(ticker, stock_name):
     """DART 최근 7일 공시 - 중요 공시만 필터"""
@@ -214,20 +251,18 @@ def has_reason_news(news_list):
 
 
 def generate_summary(news_list, disclosure_list):
-    """공시 우선 → 특징주/급등 기사 → 일반 뉴스 → 원인 불명"""
+    """공시 최우선 → PRIORITY 기사 → REASON 기사 → 원인 불명"""
 
-    # 1. 공시 우선
+    # 1. 공시 최우선
     if disclosure_list:
         return disclosure_list[0]
 
-    # 2. 특징주/상한가/급등 기사 중 BAD_TITLE_PATTERNS 없는 것
-    PRIORITY_KEYWORDS = ["특징주", "급등", "강세", "상한가"]
+    # 2. PRIORITY_KEYWORDS 포함 기사
     for news in news_list:
-        if (any(k in news for k in PRIORITY_KEYWORDS) and
-                not any(p in news for p in BAD_TITLE_PATTERNS)):
+        if any(k in news for k in PRIORITY_KEYWORDS):
             return news
 
-    # 3. REASON_KEYWORDS 포함된 일반 뉴스
+    # 3. REASON_KEYWORDS 포함 기사
     for news in news_list:
         if any(k in news for k in REASON_KEYWORDS):
             return news
