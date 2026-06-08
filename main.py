@@ -3,7 +3,6 @@ import time
 from datetime import datetime, timedelta
 import pandas as pd
 import feedparser
-from openai import OpenAI
 import requests
 from bs4 import BeautifulSoup
 import OpenDartReader
@@ -11,16 +10,23 @@ import OpenDartReader
 # 환경변수
 TELEGRAM_TOKEN = os.environ['TELEGRAM_TOKEN']
 TELEGRAM_CHAT_ID = os.environ['TELEGRAM_CHAT_ID']
-OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
 DART_API_KEY = os.environ['DART_API_KEY']
 
-client = OpenAI(api_key=OPENAI_API_KEY)
 dart = OpenDartReader(DART_API_KEY)
 
-TEST_DATE = None  # 테스트시 "20260605" 입력, 운영시 None
+TEST_DATE = None  # 테스트시 "20260605", 운영시 None
 
-# 블로그성 뉴스 필터
-BAD_KEYWORDS = ["투자분석", "주달", "톺아보기", "민낯", "수급포착", "주가분석", "주가전망"]
+# 저품질 뉴스 필터
+BAD_KEYWORDS = [
+    "투자분석", "주달", "톺아보기", "민낯", "수급포착",
+    "주가분석", "주가전망", "주가 왜", "무슨 회사"
+]
+
+# 우량 언론사 (점수 +10)
+GOOD_MEDIA = [
+    "연합뉴스", "한국경제", "매일경제", "이데일리",
+    "머니투데이", "서울경제", "조선비즈", "전자신문", "딜사이트"
+]
 
 # 중요 공시 키워드
 IMPORTANT_DISCLOSURES = [
@@ -28,6 +34,17 @@ IMPORTANT_DISCLOSURES = [
     "전환사채", "교환사채", "영업양수", "영업양도", "주요사항보고서",
     "자기주식취득", "합병", "분할", "임상", "특허", "계약"
 ]
+
+# 원인 분류 키워드 매핑
+CATEGORY_RULES = {
+    "AI": ["AI", "인공지능", "LLM", "ChatGPT"],
+    "반도체": ["반도체", "MLCC", "삼성전자", "삼성전기", "SK하이닉스"],
+    "바이오": ["비만", "임상", "신약", "치료제", "의약", "바이오", "제약"],
+    "정책수혜": ["국토부", "정부", "정책", "사업 선정", "수주"],
+    "M&A": ["합병", "인수", "지분", "M&A"],
+    "수급": ["자기주식", "자사주", "대량보유"],
+    "실적개선": ["실적", "흑자", "매출", "영업이익"]
+}
 
 
 def get_today():
@@ -66,14 +83,12 @@ def get_upper_limit_stocks():
                 if not name or name in seen_names:
                     continue
 
-                # 종목코드 추출
                 ticker = ''
                 link = cols[3].select_one('a')
                 if link and 'href' in link.attrs:
                     href = link['href']
                     ticker = href.split('code=')[-1] if 'code=' in href else ''
 
-                # 등락률 파싱
                 rate_clean = rate_text.replace('%', '').replace('+', '').strip()
                 try:
                     rate = float(rate_clean)
@@ -101,22 +116,34 @@ def get_upper_limit_stocks():
         return pd.DataFrame()
 
 
+def news_score(title):
+    """뉴스 품질 점수"""
+    score = 0
+    for media in GOOD_MEDIA:
+        if media in title:
+            score += 10
+    for bad in BAD_KEYWORDS:
+        if bad in title:
+            score -= 10
+    return score
+
+
 def get_news(stock_name):
-    """구글 뉴스 RSS 수집 + 블로그성 기사 필터"""
+    """구글 뉴스 RSS 수집 + 품질 필터"""
     try:
-        query = f'"{stock_name}" 주가'.replace(" ", "+")
+        query = f'"{stock_name}"'.replace(" ", "+")
         url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
         feed = feedparser.parse(url)
 
         news_list = []
-        for entry in feed.entries[:10]:
+        for entry in feed.entries[:15]:
             title = entry.title
             if not any(k in title for k in BAD_KEYWORDS):
                 news_list.append(title)
-            if len(news_list) >= 5:
-                break
 
-        return news_list if news_list else []
+        # 품질 점수 기준 정렬 후 상위 3개
+        news_list = sorted(news_list, key=news_score, reverse=True)[:3]
+        return news_list
 
     except Exception as e:
         print(f"뉴스 오류 ({stock_name}): {e}")
@@ -139,58 +166,31 @@ def get_dart_disclosure(ticker, stock_name):
             return []
 
         all_titles = disclosures['report_nm'].tolist()
-
-        # 중요 공시 우선
         important = [t for t in all_titles if any(k in t for k in IMPORTANT_DISCLOSURES)]
-        return important[:3] if important else all_titles[:2]
+        return important[:3] if important else []
 
     except Exception as e:
         print(f"공시 오류 ({stock_name}): {e}")
         return []
 
 
-def get_ai_summary(stock_name, news_list, disclosure_list):
-    """GPT 요약 - 뉴스/공시 근거 기반"""
-    try:
-        news_text = "\n".join(news_list) if news_list else "뉴스 없음"
-        disclosure_text = "\n".join(disclosure_list) if disclosure_list else "공시 없음"
+def classify_reason(news_list, disclosure_list):
+    """키워드 기반 원인 분류 - AI 추론 없음"""
+    combined = " ".join(news_list + disclosure_list)
+    for category, keywords in CATEGORY_RULES.items():
+        for keyword in keywords:
+            if keyword in combined:
+                return category
+    return "기타"
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            max_tokens=250,
-            messages=[{
-                "role": "user",
-                "content": f"""
-종목명: {stock_name}
 
-[당일 공시]
-{disclosure_text}
-
-[관련 뉴스]
-{news_text}
-
-규칙:
-1. 반드시 위 공시/뉴스 내용에만 근거해서 작성
-2. 공시/뉴스에 없는 내용은 절대 추가하지 말 것
-3. 명확한 근거가 없으면 "원인 불명" 작성
-4. 추측, 일반론("시장 기대감", "투자심리") 금지
-5. 핵심만 2~3줄로 간결하게
-
-아래 형식으로만 답변:
-
-[상한가 원인]
-(공시/뉴스 근거 2~3줄 또는 "원인 불명")
-
-[원인 분류]
-AI / 반도체 / 바이오 / 정책수혜 / 실적개선 / M&A / 수급 / 기타 중 하나만
-"""
-            }]
-        )
-        return response.choices[0].message.content.strip()
-
-    except Exception as e:
-        print(f"GPT 오류 ({stock_name}): {e}")
-        return "[상한가 원인]\n원인 불명\n\n[원인 분류]\n기타"
+def generate_summary(news_list, disclosure_list):
+    """GPT 없이 공시/뉴스 제목으로 요약 생성"""
+    if disclosure_list:
+        return disclosure_list[0]
+    if news_list:
+        return news_list[0]
+    return "원인 불명"
 
 
 def send_telegram(message):
@@ -224,29 +224,31 @@ def main():
 
         print(f"\n{'='*30}\n{name} 처리 중...")
 
-        # 뉴스 수집
         news_list = get_news(name)
-        print(f"[뉴스] {news_list}")
         time.sleep(1)
 
-        # 공시 수집
         disclosure_list = get_dart_disclosure(ticker, name)
-        print(f"[공시] {disclosure_list}")
-        time.sleep(1)
+        time.sleep(0.5)
 
-        # GPT 요약
-        summary = get_ai_summary(name, news_list, disclosure_list)
+        summary = generate_summary(news_list, disclosure_list)
+        category = classify_reason(news_list, disclosure_list)
 
         # 메시지 조합
         msg += f"━━━━━━━━━━━━━━\n"
         msg += f"*{name}* (+{rate:.1f}%)\n\n"
-        msg += f"{summary}\n\n"
+        msg += f"📌 *요약*\n{summary}\n\n"
+        msg += f"🏷 *분류*\n{category}\n\n"
 
-        # 관련 뉴스 제목 나열
+        if disclosure_list:
+            msg += f"📄 *주요 공시*\n"
+            for d in disclosure_list:
+                msg += f"• {d}\n"
+            msg += "\n"
+
         if news_list:
             msg += f"📰 *관련 뉴스*\n"
-            for news in news_list[:3]:
-                msg += f"• {news}\n"
+            for n in news_list:
+                msg += f"• {n}\n"
             msg += "\n"
 
     # 4000자 초과시 나눠서 전송
