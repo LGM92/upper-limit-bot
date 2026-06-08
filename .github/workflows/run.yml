@@ -21,7 +21,6 @@ jobs:
 
       - name: 패키지 설치
         run: |
-          pip install openai
           pip install requests
           pip install beautifulsoup4
           pip install pandas
