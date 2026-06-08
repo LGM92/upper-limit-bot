@@ -142,29 +142,50 @@ def get_news(stock_name):
         url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
         feed = feedparser.parse(url)
 
-        news_list = []
+        scored = []
         for entry in feed.entries[:20]:
             title = entry.title
+            published = entry.get("published", "")
 
-            # 저품질 키워드 제거
             if any(k in title for k in BAD_KEYWORDS):
                 continue
 
-            news_list.append(title)
+            scored.append((title, published))
 
-        # 스코어링: 원인 기사 우선, 결과 기사 후순위
-        def score_news(title):
+        # 스코어링: 원인 키워드 + 날짜 가중치
+        from email.utils import parsedate_to_datetime
+
+        def score_news(item):
+            title, published = item
             score = 0
+
             for k in GOOD_REASON_KEYWORDS:
                 if k in title:
                     score += 20
             for k in BAD_REASON_KEYWORDS:
                 if k in title:
                     score -= 15
+
+            # 날짜 가중치
+            try:
+                pub_dt = parsedate_to_datetime(published)
+                now = datetime.now(pub_dt.tzinfo)
+                days_old = (now - pub_dt).days
+                if days_old <= 1:
+                    score += 20
+                elif days_old <= 3:
+                    score += 10
+                elif days_old <= 7:
+                    score += 5
+                elif days_old > 30:
+                    score -= 20
+            except:
+                pass
+
             return score
 
-        news_list = sorted(news_list, key=score_news, reverse=True)
-        return news_list[:10]
+        scored = sorted(scored, key=score_news, reverse=True)
+        return [title for title, published in scored[:10]]
 
     except Exception as e:
         print(f"뉴스 오류 ({stock_name}): {e}")
@@ -268,8 +289,9 @@ def gpt_filter_news(stock_name, news_list, disclosure_list):
 def gpt_summarize(stock_name, filtered_news, disclosure_list):
     """GPT 2단계: 원인 1줄 요약 + 분류"""
     try:
-        if not filtered_news and not disclosure_list:
-            return "원인 불명", "기타"
+        # 원인 기사가 2개 미만이고 공시도 없으면 바로 확인 불가 반환
+        if not disclosure_list and len(filtered_news) < 2:
+            return "관련 원인 기사 확인되지 않음", "기타"
 
         if disclosure_list:
             source_text = "[공시]\n" + "\n".join(disclosure_list)
