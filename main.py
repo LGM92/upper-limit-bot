@@ -14,7 +14,7 @@ DART_API_KEY = os.environ['DART_API_KEY']
 
 dart = OpenDartReader(DART_API_KEY)
 
-TEST_DATE = "20260605"  # 테스트시 "20260605", 운영시 None
+TEST_DATE = None  # 테스트시 "20260605", 운영시 None
 
 # 저품질 뉴스 필터
 BAD_KEYWORDS = [
